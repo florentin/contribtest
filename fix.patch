@@ -1,0 +1,251 @@
+From 10565383797b929ce5f83ae5e1f7e0493acad88c Mon Sep 17 00:00:00 2001
+From: elmo <elmo@elmo-laptop.(none)>
+Date: Mon, 12 Nov 2012 20:26:13 +0200
+Subject: [PATCH] fixed code, tests, documentation
+
+---
+ .gitignore                   |    1 +
+ README.md                    |   58 +++++++++++++++++++++++++++++++++++++
+ generate.py                  |   65 ++++++++++++++++++++++++++----------------
+ test/source/layout/base.html |    2 --
+ tests.py                     |   47 ++++++++++++++++++++++++++++++
+ 5 files changed, 146 insertions(+), 27 deletions(-)
+ create mode 100644 .gitignore
+ create mode 100644 README.md
+ create mode 100644 tests.py
+
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..0d20b64
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1 @@
++*.pyc
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..2ea6e52
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,58 @@
++# Contribtest
++Contribtest is a command line Python tool for creating static html pages based on Jinja2 templates. It's excellent for cases where you want to build and maintain a small static website.
++
++# Installation (Linux distros)
++
++1. Install virtualenv - http://www.virtualenv.org/en/latest/#installation
++
++2. Install git - http://git-scm.com/downloads 
++
++3. Clone "contribtest" from Git
++
++`$ git clone https://github.com/eaudeweb/contribtest`
++
++4. Create a new virtual environment inside "contribtest"
++
++`$ virtualenv env --python=python2.7`
++
++**note:** The script was tested with Python 2.7
++ 
++5. Activate the virtual environment
++
++`$ source ./env/bin/activate`
++
++6. Install the dependencies
++
++`$ pip install jinja2`
++
++# Usage
++
++Verify that you're using the Python version from the newly created virtual environment
++
++`$ which python`
++
++The application comes with some test source templates and configurations. 
++To create new html pages based on the test sources and put them into the /tmp folder:
++
++`$ python generate.py ./test/source/ /tmp`
++
++# Documentation
++
++The Contribtest's command line tool is called "generate.py". It accepts 2 arguments:
++
++* a source folder where the "*.rst" configuration files are located. This must hold a subfolder called "layout" where the Jinja2 templates are to be found.
++* a destination folder where the generated htmls will be saved
++
++Contribtest is creating html pages with the help of the Jinja2 templating language.
++In order to create a html page Jinja2 requires a template name and a context.
++The template name is a html file which contains Jinja2 special tags.
++The context is a dictionary which will provide the data for the template.
++
++Contribtest uses ".rst" files to define the context. The file starts with JSON formatted string followed by the "---" separator. The text following the delimitator will become the "content" information. The JSON string must include a "layout" key which is the template name. The templates are placed inside a directory called "layout" located at the same level as the *.rst files
++See the *.rst examples from "./test/source/".
++
++Jinja2 documentation:
++http://jinja.pocoo.org/docs/
++
++# Running the unit tests
++`$ python tests.py`
+\ No newline at end of file
+diff --git a/generate.py b/generate.py
+index e7fb9ec..30abe1b 100644
+--- a/generate.py
++++ b/generate.py
+@@ -6,50 +6,65 @@
+ import os
+ import logging
+ import jinja2
++import sys
++import json
++import warnings
+ 
+ log = logging.getLogger(__name__)
+ 
+-
+ def list_files(folder_path):
+     for name in os.listdir(folder_path):
+-        base, ext = os.path.splitext(name)
+-        if ext != '.rst':
+-            continue
+-        yield os.path.join(folder_path, name)
++        if name.endswith(".rst"):
++            yield os.path.join(folder_path, name)
+ 
+ def read_file(file_path):
+-    with open(file_path, 'rb') as f:
+-        raw_metadata = ""
+-        for line in f:
+-            if line.strip() == '---':
+-                break
+-            raw_metadata += line
+-        content = ""
+-        for line in f:
+-            content += line
+-    return json.loads(raw_metadata), content
+-
++    with open(file_path) as f:
++        metadata, content = f.read().split('---', 1)
++    return json.loads(metadata), content.strip()
++    
+ def write_output(name, html):
+     # TODO should not use sys.argv here, it breaks encapsulation
+-    with open(os.path.join(sys.argv[2], name+'.html')) as f:
++    with open(name, "w") as f:
+         f.write(html)
+ 
+-def generate_site(folder_path):
++def generate_site(folder_path, output_path):
++    layout_input_path = os.path.join(folder_path, 'layout')
++    
++    for path, error_msg in [
++        (folder_path, "Input Path does not exists: {}"),
++        (layout_input_path, "Layout Input path does not exists: {}"),
++        (output_path, "Output Path does not exists: {}")
++    ]:
++        if not os.path.exists(path):
++            raise RuntimeError(error_msg.format(path))
++        
+     log.info("Generating site from %r", folder_path)
+-    jinja_env = jinja2.Environment(loader=FileSystemLoader(folder_path + 'layout'))
+-    for file_path in list_files(folder_path):
++    jinja_env = jinja2.Environment(
++                    loader=jinja2.FileSystemLoader(layout_input_path),
++                    trim_blocks=True
++    )
++    for file_path in list_files(folder_path):                
+         metadata, content = read_file(file_path)
+-        template_name = metadata['template']
++        if not 'layout' in metadata:
++            warnings.warn("The file {} is missing the layout information.".format(file_path))
++            continue
++        
++        template_name = metadata['layout']
+         template = jinja_env.get_template(template_name)
+         data = dict(metadata, content=content)
+-        html = template(**data)
+-        write_output(name, html)
++        html = template.render(**data)
++        name, _ = os.path.splitext(os.path.basename(file_path))
++        output_file = os.path.join(output_path, name+'.html')
++        write_output(output_file, html)
+         log.info("Writing %r with template %r", name, template_name)
+ 
+ 
+ def main():
+-    generate_site(sys.argv[1])
+-
++    if len(sys.argv)!=3:
++        raise RuntimeError("usage: generate.py input_path output_path")
++    input_path = sys.argv[1]
++    output_path = sys.argv[2]
++    generate_site(input_path, output_path)
+ 
+ if __name__ == '__main__':
+     logging.basicConfig()
+diff --git a/test/source/layout/base.html b/test/source/layout/base.html
+index 47be5eb..8e6e6d0 100644
+--- a/test/source/layout/base.html
++++ b/test/source/layout/base.html
+@@ -1,7 +1,5 @@
+ <h1>{{ title }}</h1>
+ 
+ {% block content %}
+-
+ {{ content }}
+-
+ {% endblock %}
+diff --git a/tests.py b/tests.py
+new file mode 100644
+index 0000000..40fde8d
+--- /dev/null
++++ b/tests.py
+@@ -0,0 +1,47 @@
++import unittest
++import os
++import generate
++
++class GenerateTestCase(unittest.TestCase):
++    def setUp(self):
++        self.input_path = "./test/source/"
++        self.output_path = "/tmp/contribtext/"
++        if not os.path.exists(self.output_path):
++            os.makedirs(self.output_path)
++        self.path_to_test = os.path.abspath(os.path.dirname(__file__))
++        
++    def tearDown(self):
++        for root, dirs, files in os.walk(self.output_path, topdown=False):
++            for name in files:
++                os.remove(os.path.join(root, name))
++            for name in dirs:
++                os.rmdir(os.path.join(root, name))
++        os.rmdir(self.output_path)
++
++    def test_normal(self):
++        response = generate.generate_site(self.input_path, self.output_path)
++        self.assertIs(response, None)
++        
++        with open(os.path.join(self.path_to_test, "test/expected_output/contact.html")) as fexpected:
++            with open(os.path.join(self.output_path, "contact.html")) as fgenerated:
++                expected_html = fexpected.read()
++                generated_html = fgenerated.read()
++        
++        self.assertEqual(generated_html, expected_html)
++    
++    def test_abnormal(self):
++        self.assertRaises(TypeError, generate.generate_site, *("", ))
++        failing_args = [
++                    ("", ""),
++                    ("", self.output_path),
++                    (self.input_path, ""),
++                    (self.input_path+"/bad", self.output_path),
++                    ("/tmp", self.output_path),
++                    (self.input_path, self.output_path+"/bad")
++        ]
++        for args in failing_args:
++            self.assertRaises(RuntimeError, generate.generate_site, *args)
++
++    
++if __name__ == '__main__':
++    unittest.main()
+-- 
+1.7.9.5
+
